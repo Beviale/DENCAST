@@ -1,0 +1,28 @@
+# Data and artifacts are tracked by DVC, not git
+/data/external/*
+/data/raw/*
+/data/interim/*
+/data/processed/*
+/models/*
+!**/.gitignore
+
+# MLflow local backend
+/mlruns/
+mlflow.db
+mlartifacts/
+
+# Secrets
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.ipynb_checkpoints/
+
+# Spark
+spark-warehouse/
+metastore_db/
+derby.log

@@ -1,0 +1,636 @@
+schema: '2.0'
+stages:
+  extract:
+    cmd: uv run python -m dencast.dataset
+    deps:
+    - path: data/external/pv_italy.sql
+      hash: md5
+      md5: ed057e0b6589567a0391faa214b4d35f
+      size: 286867364
+    - path: dencast/dataset.py
+      hash: md5
+      md5: 6c0515eb2b71ab0cf705370831d754f9
+      size: 6396
+    params:
+      params.yaml:
+        dataset.date_col: data
+        dataset.feature_cols:
+        - idsito
+        - lat
+        - lon
+        - day
+        - ora
+        - temperatura_ambiente
+        - irradiamento
+        - altitude
+        - azimuth
+        - pressure
+        - windspeed
+        - humidity
+        - icon
+        - dewpoint
+        - windbearing
+        - cloudcover
+        dataset.id_col: id
+        dataset.name: pv_italy
+        dataset.source: data/external/pv_italy.sql
+        dataset.table: it_dataset_hourly_full
+        dataset.target_cols:
+        - kwh
+    outs:
+    - path: data/raw/pv_italy.csv
+      hash: md5
+      md5: 179e8c6766299e0fdf42ec8e751a8ef8
+      size: 67247050
+  features:
+    cmd: uv run python -m dencast.data.features
+    deps:
+    - path: data/raw/pv_italy_inj.csv
+      hash: md5
+      md5: cdb8a586d2c4c8b38219cbbcdd45f43c
+      size: 43139845
+    - path: dencast/data/features.py
+      hash: md5
+      md5: f2d02a54fa2621793679a4f4ca6579e7
+      size: 7211
+    - path: dencast/spark_session.py
+      hash: md5
+      md5: b941500347f1db68d9fc8978827e0d46
+      size: 5119
+    - path: dencast/utils.py
+      hash: md5
+      md5: 0a73a849fb80eec247e8de75916d8278
+      size: 9756
+    params:
+      params.yaml:
+        dataset:
+          name: pv_italy_inj
+          source: data/external/pv_italy_injected.csv
+          table:
+          id_col: id
+          date_col: data
+          group_col: idsito
+          feature_cols:
+          - idsito
+          - lat
+          - lon
+          - day
+          - ora
+          - temperatura_ambiente
+          - irradiamento
+          - altitude
+          - azimuth
+          - pressure
+          - windspeed
+          - humidity
+          - icon
+          - dewpoint
+          - windbearing
+          - cloudcover
+          target_cols:
+          - kwh
+          cyclical_cols: {}
+          anomaly_col: anomaly
+          subsample_minutes:
+          scale_features: false
+        spark:
+          master: local[*]
+          driver_memory: 3g
+          num_partitions: 8
+    outs:
+    - path: data/processed/pv_italy_inj.parquet
+      hash: md5
+      md5: 4e69077ead4e8f8e8a94f24a560ffc47.dir
+      size: 33381785
+      nfiles: 24
+  train:
+    cmd: uv run python -m dencast.modeling.train
+    deps:
+    - path: data/processed/pv_italy.parquet
+      hash: md5
+      md5: 0ecab32d3b6a5ddbb6843f8f1e4a775c.dir
+      size: 33379395
+      nfiles: 36
+    - path: dencast/clustering.py
+      hash: md5
+      md5: 2992a6676a6cd65ae2a129f75b866e90
+      size: 7914
+    - path: dencast/lsh.py
+      hash: md5
+      md5: 721e496c6bee8c81b81ba3edaae7f63e
+      size: 10191
+    - path: dencast/modeling/train.py
+      hash: md5
+      md5: d86741c31b4467ff88e8ad21e3897ff1
+      size: 8087
+    - path: references/pv_italy_1.txt
+      hash: md5
+      md5: d0b9ce93bf58032b8f4842575015f469
+      size: 935
+    params:
+      params.yaml:
+        clustering:
+          min_pts: 3
+          label_change_rate: 0.05
+          max_iterations: 100
+        evaluation:
+          window_size: 30
+          test_dates_file: references/pv_italy_1.txt
+          max_test_dates: 6
+          seeds:
+          - 42
+        lsh:
+          r: 5
+          num_permutations: 20
+          b: 6
+          min_sim: 0.98
+          use_targets_in_signature: true
+        mlflow:
+          experiment_name: dencast-pv-italy
+          run_name_prefix: pv_italy_st
+        spark:
+          master: local[*]
+          driver_memory: 6g
+          num_partitions: 20
+    outs:
+    - path: models/pv_italy
+      hash: md5
+      md5: 7406fc9712db3c66a7c5fe68c92cc789.dir
+      size: 1585058
+      nfiles: 125
+    - path: reports/train_metrics.json
+      hash: md5
+      md5: 5c4f39579bb186c2c0fd232cc26e57e7
+      size: 351
+  evaluate:
+    cmd: uv run python -m dencast.modeling.predict
+    deps:
+    - path: data/processed/pv_italy.parquet
+      hash: md5
+      md5: cb7e052862293419f822158deb61c814
+      size: 33527012
+    - path: dencast/clustering.py
+      hash: md5
+      md5: 5fce9ab38bbd0b7f9be43965a06452ba
+      size: 7915
+    - path: dencast/lsh.py
+      hash: md5
+      md5: 961dab8af938033829ff0b09ac6e0248
+      size: 10192
+    - path: dencast/metrics.py
+      hash: md5
+      md5: d4d511383b64b15e616d4083a928c5d6
+      size: 5242
+    - path: dencast/modeling/predict.py
+      hash: md5
+      md5: 207bd3e640fd7cbbd552053e76ec28b3
+      size: 15963
+    - path: dencast/modeling/train.py
+      hash: md5
+      md5: 7d28425db5f72b55e33d5aea03001929
+      size: 8110
+    - path: references/pv_italy_1.txt
+      hash: md5
+      md5: d0b9ce93bf58032b8f4842575015f469
+      size: 935
+    params:
+      params.yaml:
+        clustering:
+          min_pts: 3
+          label_change_rate: 0.05
+          max_iterations: 100
+        evaluation:
+          window_size: 30
+          test_dates_file: references/pv_italy_1.txt
+          max_test_dates: 20
+          seeds:
+          - 42
+        lsh:
+          r: 5
+          num_permutations: 20
+          b: 6
+          min_sim: 0.98
+          use_targets_in_signature: true
+        mlflow:
+          experiment_name: dencast-pv-italy
+          run_name_prefix: pv_italy_st
+        spark:
+          master: local[*]
+          driver_memory: 6g
+          num_partitions: 8
+    outs:
+    - path: reports/metrics.json
+      hash: md5
+      md5: bd9111f6463ade3e44c0e5548a4aebb8
+      size: 405
+    - path: reports/per_day_metrics.csv
+      hash: md5
+      md5: 2c57d54ca9079a3c06f27cfcb5fecd24
+      size: 3678
+  extract_data:
+    cmd: uv run python -m dencast.data.extract_data
+    deps:
+    - path: data/external/pv_italy_injected.csv
+      hash: md5
+      md5: 8519430a865fcfff6a45c51782fc9b01
+      size: 43402113
+    - path: dencast/data/extract_data.py
+      hash: md5
+      md5: c1035c0a527001513f63a4dc834bee3f
+      size: 7841
+    - path: dencast/utils.py
+      hash: md5
+      md5: 0a73a849fb80eec247e8de75916d8278
+      size: 9756
+    params:
+      params.yaml:
+        dataset.anomaly_col: anomaly
+        dataset.date_col: data
+        dataset.feature_cols:
+        - idsito
+        - lat
+        - lon
+        - day
+        - ora
+        - temperatura_ambiente
+        - irradiamento
+        - altitude
+        - azimuth
+        - pressure
+        - windspeed
+        - humidity
+        - icon
+        - dewpoint
+        - windbearing
+        - cloudcover
+        dataset.group_col: idsito
+        dataset.id_col: id
+        dataset.name: pv_italy_inj
+        dataset.source: data/external/pv_italy_injected.csv
+        dataset.table:
+        dataset.target_cols:
+        - kwh
+    outs:
+    - path: data/raw/pv_italy_inj.csv
+      hash: md5
+      md5: cdb8a586d2c4c8b38219cbbcdd45f43c
+      size: 43139845
+  calibrate:
+    cmd: uv run python -m dencast.modeling.calibrate
+    deps:
+    - path: data/processed/pv_italy.parquet
+      hash: md5
+      md5: cb7e052862293419f822158deb61c814
+      size: 33527012
+    - path: dencast/calibration.py
+      hash: md5
+      md5: 7b4540f8370a53e9c2701b801fb02524
+      size: 11988
+    - path: dencast/clustering.py
+      hash: md5
+      md5: 5fce9ab38bbd0b7f9be43965a06452ba
+      size: 7915
+    - path: dencast/lsh.py
+      hash: md5
+      md5: 961dab8af938033829ff0b09ac6e0248
+      size: 10192
+    - path: dencast/modeling/calibrate.py
+      hash: md5
+      md5: f893a5ff174362d3b714b40d510c4466
+      size: 5767
+    - path: dencast/modeling/predict.py
+      hash: md5
+      md5: 9370b90ac18b72b06ce0ba6a4d9c56ae
+      size: 16639
+    - path: dencast/modeling/train.py
+      hash: md5
+      md5: 744b79e204c3640a07f45100f11c679f
+      size: 7876
+    - path: references/pv_italy_1.txt
+      hash: md5
+      md5: d0b9ce93bf58032b8f4842575015f469
+      size: 935
+    params:
+      params.yaml:
+        clustering:
+          min_pts: 3
+          label_change_rate: 0.05
+          max_iterations: 100
+        evaluation:
+          window_size: 30
+          test_dates_file: references/pv_italy_1.txt
+          max_test_dates: 6
+          seeds:
+          - 42
+        lsh:
+          r: 5
+          num_permutations: 20
+          b: 6
+          min_sim: 0.98
+          use_targets_in_signature: true
+        mlflow:
+          experiment_name: dencast-pv-italy
+          run_name_prefix: pv_italy_st
+        spark:
+          master: local[*]
+          driver_memory: 6g
+          num_partitions: 8
+    outs:
+    - path: models/calibration/pv_italy.json
+      hash: md5
+      md5: 9c9c8b31067e10fe4633ea1dddbec11c
+      size: 673
+    - path: reports/calibration.json
+      hash: md5
+      md5: 14cdda10c7b0ea15182c5342951f2187
+      size: 1038
+  score:
+    cmd: uv run python -m dencast.modeling.score
+    deps:
+    - path: data/processed/pv_italy.parquet
+      hash: md5
+      md5: cb7e052862293419f822158deb61c814
+      size: 33527012
+    - path: dencast/anomaly.py
+      hash: md5
+      md5: a8421a7eedb301617e6d5bca6cd2e604
+      size: 13629
+    - path: dencast/calibration.py
+      hash: md5
+      md5: 7b4540f8370a53e9c2701b801fb02524
+      size: 11988
+    - path: dencast/loo.py
+      hash: md5
+      md5: bc90198003245b78f93611baf7c4e79c
+      size: 4887
+    - path: dencast/modeling/predict.py
+      hash: md5
+      md5: 9370b90ac18b72b06ce0ba6a4d9c56ae
+      size: 16639
+    - path: dencast/modeling/score.py
+      hash: md5
+      md5: 4e5345f79feaf84de465651c76a6f2dd
+      size: 6820
+    - path: dencast/modeling/train.py
+      hash: md5
+      md5: 744b79e204c3640a07f45100f11c679f
+      size: 7876
+    - path: models/calibration/pv_italy.json
+      hash: md5
+      md5: 9c9c8b31067e10fe4633ea1dddbec11c
+      size: 673
+    - path: references/pv_italy_1.txt
+      hash: md5
+      md5: d0b9ce93bf58032b8f4842575015f469
+      size: 935
+    params:
+      params.yaml:
+        clustering:
+          min_pts: 3
+          label_change_rate: 0.05
+          max_iterations: 100
+        evaluation:
+          window_size: 30
+          test_dates_file: references/pv_italy_1.txt
+          max_test_dates: 6
+          seeds:
+          - 42
+        lsh:
+          r: 5
+          num_permutations: 20
+          b: 6
+          min_sim: 0.98
+          use_targets_in_signature: true
+        mlflow:
+          experiment_name: dencast-pv-italy
+          run_name_prefix: pv_italy_st
+        spark:
+          master: local[*]
+          driver_memory: 6g
+          num_partitions: 8
+    outs:
+    - path: reports/anomaly_scores.csv
+      hash: md5
+      md5: 6846f4f8b6bbce0b9cc17da575dedcb8
+      size: 291577
+    - path: reports/anomaly_summary.json
+      hash: md5
+      md5: b3ef5949cd00422b3ef9fc2b02c2863c
+      size: 298
+  split_dataset:
+    cmd: uv run python -m dencast.data.split_dataset
+    deps:
+    - path: data/processed/pv_italy.parquet
+      hash: md5
+      md5: d05e1f980bac8a0b095f7037b589f69d.dir
+      size: 33379395
+      nfiles: 36
+    - path: dencast/data/split_dataset.py
+      hash: md5
+      md5: 0e7bf451c2af402dda012f0f95a906d9
+      size: 4689
+    - path: dencast/split.py
+      hash: md5
+      md5: 810e78c695897dbfe2c8add57188bd2a
+      size: 5871
+    - path: dencast/utils.py
+      hash: md5
+      md5: 0a73a849fb80eec247e8de75916d8278
+      size: 9756
+    params:
+      params.yaml:
+        dataset.anomaly_col:
+        spark:
+          master: local[*]
+          driver_memory: 6g
+          num_partitions: 20
+        split:
+          train_fraction: 0.7
+    outs:
+    - path: data/processed/pv_italy_test.parquet
+      hash: md5
+      md5: b3f4f5d7c06b3a3d6d6e7257a1617efa.dir
+      size: 8918218
+      nfiles: 36
+    - path: data/processed/pv_italy_train.parquet
+      hash: md5
+      md5: 0e3843c1832e88d4512e64eb4bae6a77.dir
+      size: 24486322
+      nfiles: 36
+    - path: reports/split.json
+      hash: md5
+      md5: d7d873b61763e7713f730e71a6b1b477
+      size: 386
+  train_and_select:
+    cmd: uv run python -m dencast.modeling.train_and_select
+    deps:
+    - path: data/processed/pv_italy_train.parquet
+      hash: md5
+      md5: 05a696dc00de6839e87ac939db2072e3.dir
+      size: 24486322
+      nfiles: 36
+    - path: dencast/clustering.py
+      hash: md5
+      md5: 2992a6676a6cd65ae2a129f75b866e90
+      size: 7914
+    - path: dencast/lsh.py
+      hash: md5
+      md5: 721e496c6bee8c81b81ba3edaae7f63e
+      size: 10191
+    - path: dencast/metrics.py
+      hash: md5
+      md5: c5ec50694c578dac159040043afd9037
+      size: 10023
+    - path: dencast/modeling/fit.py
+      hash: md5
+      md5: d4a863e77761e827c2f04a96bd17fb23
+      size: 5083
+    - path: dencast/modeling/predict.py
+      hash: md5
+      md5: 93e1c926ed4ec0f7fb34860dd4a37d47
+      size: 9027
+    - path: dencast/modeling/train_and_select.py
+      hash: md5
+      md5: 8c91946c77805b025382a62d43e1312b
+      size: 12378
+    - path: dencast/split.py
+      hash: md5
+      md5: 810e78c695897dbfe2c8add57188bd2a
+      size: 5871
+    - path: dencast/utils.py
+      hash: md5
+      md5: 0a73a849fb80eec247e8de75916d8278
+      size: 9756
+    params:
+      params.yaml:
+        clustering:
+          min_pts: 3
+          label_change_rate: 0.05
+          max_iterations: 100
+        evaluation:
+          window_size: 30
+          seeds:
+          - 42
+          n_calibration_days: 5
+        lsh:
+          r: 5
+          num_permutations: 20
+          b: 6
+          min_sim: 0.98
+          use_targets_in_signature: true
+        mlflow:
+          experiment_name: dencast-pv-italy
+          run_name_prefix: pv_italy_repro
+        selection:
+          n_days: 10
+          seed: 42
+          metric: rmse_avg
+          grid: {}
+        spark:
+          master: local[*]
+          driver_memory: 6g
+          num_partitions: 20
+    outs:
+    - path: models/selection/pv_italy.json
+      hash: md5
+      md5: 08959ba87420c142286522353fa901c7
+      size: 414
+    - path: reports/selection.json
+      hash: md5
+      md5: fcec8e55cd6b40b5f141b88796a0a333
+      size: 168
+    - path: reports/selection_grid.csv
+      hash: md5
+      md5: aceaa273c1fd5f5999b84816aa552963
+      size: 1542
+  train_winner:
+    cmd: uv run python -m dencast.modeling.train_winner
+    deps:
+    - path: data/processed/care_a_test.parquet
+      hash: md5
+      md5: b877abe29c73d8bada0010044b82ef35.dir
+      size: 14263002
+      nfiles: 10
+    - path: data/processed/care_a_train.parquet
+      hash: md5
+      md5: acca46d7d011a5f5f2c23776c9d33298.dir
+      size: 12224626
+      nfiles: 8
+    - path: dencast/calibration.py
+      hash: md5
+      md5: 0142be5c652b1a48e5c1ec40c0c5006d
+      size: 12291
+    - path: dencast/clustering.py
+      hash: md5
+      md5: 2992a6676a6cd65ae2a129f75b866e90
+      size: 7914
+    - path: dencast/lsh.py
+      hash: md5
+      md5: 721e496c6bee8c81b81ba3edaae7f63e
+      size: 10191
+    - path: dencast/metrics.py
+      hash: md5
+      md5: c5ec50694c578dac159040043afd9037
+      size: 10023
+    - path: dencast/modeling/fit.py
+      hash: md5
+      md5: d4a863e77761e827c2f04a96bd17fb23
+      size: 5083
+    - path: dencast/modeling/predict.py
+      hash: md5
+      md5: 93e1c926ed4ec0f7fb34860dd4a37d47
+      size: 9027
+    - path: dencast/modeling/train_winner.py
+      hash: md5
+      md5: 212111d726a54c4ebffbd40990a2559b
+      size: 8927
+    - path: dencast/split.py
+      hash: md5
+      md5: 810e78c695897dbfe2c8add57188bd2a
+      size: 5871
+    - path: dencast/utils.py
+      hash: md5
+      md5: 0a73a849fb80eec247e8de75916d8278
+      size: 9756
+    - path: models/selection/care_a.json
+      hash: md5
+      md5: 6cda75b26c2e9b441b78cc40b80f902b
+      size: 445
+    params:
+      params.yaml:
+        clustering:
+          min_pts: 3
+          label_change_rate: 0.05
+          max_iterations: 100
+        evaluation:
+          window_size: 30
+          seeds:
+          - 42
+          n_calibration_days: 5
+        lsh:
+          r: 5
+          num_permutations: 20
+          b: 6
+          min_sim: 0.98
+          use_targets_in_signature: true
+        mlflow:
+          experiment_name: dencast-care-wind
+          run_name_prefix: care_a
+        spark:
+          master: local[*]
+          driver_memory: 6g
+          num_partitions: 20
+    outs:
+    - path: models/calibration/care_a.json
+      hash: md5
+      md5: 55783e142eacd093605a9da5f8b3d726
+      size: 669
+    - path: models/care_a
+      hash: md5
+      md5: 81e3b9438d84167dc862d031925edc13.dir
+      size: 13059325
+      nfiles: 125
+    - path: reports/test_metrics.json
+      hash: md5
+      md5: 92b3d5c03cfa5cb877d02e8957b0cda8
+      size: 728

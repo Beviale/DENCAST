@@ -1,0 +1,64 @@
+{
+  // Every configuration pins the interpreter explicitly and runs from the repo
+  // root, which is what the modules assume: they resolve paths through
+  // dencast.config.PROJ_ROOT and read params.yaml from there.
+  "version": "0.2.0",
+  "configurations": [
+    {
+      // Running a file inside a package as a plain script puts its own folder
+      // on sys.path instead of the repo root, so `import dencast` fails. `-m`
+      // imports it as part of the package, the way the DVC stages do.
+      "name": "Stage: extract",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "dencast.data.extract_data",
+      "cwd": "${workspaceFolder}",
+      "python": "${workspaceFolder}/.venv/Scripts/python.exe",
+      "console": "integratedTerminal",
+      "justMyCode": false
+    },
+    {
+      "name": "Stage: features",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "dencast.features",
+      "cwd": "${workspaceFolder}",
+      "python": "${workspaceFolder}/.venv/Scripts/python.exe",
+      "console": "integratedTerminal",
+      "justMyCode": false
+    },
+    {
+      "name": "Stage: train",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "dencast.modeling.train",
+      "cwd": "${workspaceFolder}",
+      "python": "${workspaceFolder}/.venv/Scripts/python.exe",
+      "console": "integratedTerminal",
+      "justMyCode": false
+    },
+    {
+      "name": "Stage: evaluate",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "dencast.modeling.predict",
+      "cwd": "${workspaceFolder}",
+      "python": "${workspaceFolder}/.venv/Scripts/python.exe",
+      "console": "integratedTerminal",
+      "justMyCode": false
+    },
+    {
+      // Kept for scratch files. For anything under dencast/ prefer the
+      // module configurations above.
+      "name": "Current File",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${file}",
+      "cwd": "${workspaceFolder}",
+      "python": "${workspaceFolder}/.venv/Scripts/python.exe",
+      "env": { "PYTHONPATH": "${workspaceFolder}" },
+      "console": "integratedTerminal",
+      "justMyCode": false
+    }
+  ]
+}

@@ -1,0 +1,34 @@
+stages:
+
+  process_swat:
+    cmd: python -m dencast.data.process.process_swat
+    deps:
+      - dencast/data/process/process.py
+      - dencast/data/process/process_swat.py
+    outs:
+      - data/interim/swat/full_swat.parquet
+
+
+    preprocess_esa:
+    cmd: python -c "from dencast.data.preprocess.preprocess_esa"
+    deps:
+      - dencast/data/preprocess/preprocess.py
+      - dencast/data/preprocess/preprocess_esa.py
+      - data/raw/esa/ESA-Mission2/channels
+      - data/raw/esa/ESA-Mission2/channels.csv
+      - data/raw/esa/ESA-Mission2/labels.csv
+      - data/raw/esa/ESA-Mission2/anomaly_types.csv
+    outs:
+      - data/interim/esa/full_esa.parquet
+
+  split_swat:
+    cmd: python -m dencast.data.split.split_swat
+    deps:
+      - dencast/data/split/split.py
+      - dencast/data/split/split_swat.py
+      - data/interim/swat/full_swat.parquet
+    outs:
+      - data/interim/swat/split/swat_train.parquet
+      - data/interim/swat/split/swat_validation.parquet
+      - data/interim/swat/split/swat_test.parquet
+

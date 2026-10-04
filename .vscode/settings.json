@@ -1,0 +1,26 @@
+{
+  // Pin the interpreter to the project environment. Without this VS Code keeps
+  // whatever it selected last, which goes stale as soon as .venv is recreated
+  // -- and then every `from dencast...` fails with ModuleNotFoundError even
+  // though the package is installed.
+  "python.defaultInterpreterPath": "${workspaceFolder}/.venv/Scripts/python.exe",
+
+  // Run tests through the same environment.
+  "python.testing.pytestEnabled": true,
+  "python.testing.unittestEnabled": false,
+  "python.testing.pytestArgs": ["tests"],
+
+  // Keep the repo root on sys.path for the editor's own analysis, so imports
+  // resolve in the editor the same way they do at runtime.
+  "python.analysis.extraPaths": ["${workspaceFolder}"],
+
+  "[python]": {
+    "editor.formatOnSave": false,
+    "editor.rulers": [99]
+  },
+
+  "files.exclude": {
+    "**/__pycache__": true,
+    "**/*.egg-info": true
+  }
+}

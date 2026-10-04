@@ -1,0 +1,80 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dencast"
+version = "0.2.0"
+description = "DENCAST for Anomaly Detection"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+keywords = ["spark", "clustering", "lsh", "multi-target-regression", "dvc", "mlflow"]
+
+dependencies = [
+    "pyspark>=3.4,<4.0",
+    "numpy>=1.24",
+    "pyarrow>=14.0",          
+
+    "pyyaml>=6.0",
+    "typer>=0.12",
+    "loguru>=0.7",
+    "python-dotenv>=1.0",
+
+    "dvc>=3.50",
+    "dvc-s3>=3.0",            
+    "mlflow>=2.12",
+    "dagshub>=0.3",
+]
+
+[project.optional-dependencies]
+dev = [
+    "ruff>=0.5",
+    "pytest>=8.0",
+]
+notebooks = [
+    "jupyterlab>=4.0",
+    "matplotlib>=3.7",
+    "pandas>=2.0",
+]
+
+[project.scripts]
+dencast-extract = "dencast.data.extract_data:app"
+dencast-features = "dencast.features:app"
+dencast-train = "dencast.modeling.train:app"
+dencast-evaluate = "dencast.modeling.predict:app"
+
+[project.urls]
+dencast-original-paper = "https://doi.org/10.1186/s40537-019-0207-2"
+
+[tool.setuptools.packages.find]
+include = ["dencast*"]
+
+[tool.ruff]
+line-length = 99
+src = ["dencast"]
+target-version = "py39"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W", "UP", "B"]
+ignore = [
+    "E501",  # line length is handled by the formatter
+    # Typer declares CLI options as default values -- `x: Path = typer.Option(...)`
+    # -- so B008 fires on every command in the project. It is the documented
+    # pattern for the library, not a mutable-default bug.
+    "B008",
+    # The package still supports Python 3.9, where `list[str]` in a runtime
+    # annotation and `X | None` are not available unless the module opts in
+    # with `from __future__ import annotations`. Not every module does, so
+    # leave the typing-modernisation rules off until the floor moves to 3.10.
+    "UP006",
+    "UP035",
+    "UP045",
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["dencast"]
+force-sort-within-sections = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
