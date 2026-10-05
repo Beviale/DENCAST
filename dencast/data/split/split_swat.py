@@ -7,7 +7,7 @@ from dencast.data.split.split import Splitter
 
 
 class SwatSplitter(Splitter):
-    """`full_swat.parquet` cut on the two dates above."""
+    """'full_swat.parquet' cut on the two dates above."""
 
     def __init__(
         self,
