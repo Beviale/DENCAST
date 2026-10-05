@@ -15,7 +15,7 @@ PARTS = ("train", "validation", "test")
 class Splitter:
     """Cut a time-ordered table into three parts on two timestamps.
 
-    `valid_start` opens the validation part and `test_start` opens the test part, so
+    'valid_start' opens the validation part and 'test_start' opens the test part, so
     the training part is everything before the first of them. Both are exclusive
     upper bounds for the part that precedes them.
     """
@@ -36,7 +36,7 @@ class Splitter:
         if self.valid_start >= self.test_start:
             raise ValueError(
                 f"validation starts at {self.valid_start} and test at "
-                f"{self.test_start}: the validation part would be empty or reversed"
+                f"{self.test_start}."
             )
 
     # ------------------------------------------------------------- machinery
@@ -92,23 +92,7 @@ class Splitter:
         return int((np.diff(np.r_[0, (y != 0).astype(int), 0]) == 1).sum())
 
     def check_segments(self, df: pd.DataFrame, parts: dict[str, pd.DataFrame]) -> None:
-        """Refuse a cut that falls inside a labelled event.
-
-        An event split across a boundary is not one event in two parts, it is two
-        mislabelled events: each half is scored as a whole occurrence, so the same
-        attack is counted twice and both counts are of something that never
-        happened. The damage is worst for exactly the metrics a segment-level
-        evaluation is for.
-
-        The test is a count rather than an inspection of the boundary rows, because
-        it cannot be fooled: summing the runs in the parts gives one more than the
-        runs in the whole precisely when a run was divided, whatever the column
-        contains and however long the event was.
-
-        A dataset where no cut can avoid this -- one long event covering the only
-        usable boundary -- has to say so by overriding this method, which is the
-        point: it is a decision, not a default.
-        """
+        """Refuse a cut that falls inside a labelled event."""
         for col in [c for c in df.columns if c.startswith("is_")]:
             whole = self.segments(df[col].to_numpy())
             pieces = sum(self.segments(parts[p][col].to_numpy()) for p in PARTS)
@@ -122,7 +106,7 @@ class Splitter:
                                for c in (self.valid_start, self.test_start))]
             detail = "; ".join(f"{a} to {b}" for a, b in culprits[:3])
             raise ValueError(
-                f"a cut falls inside a run of `{col}`: the parts hold {pieces} runs "
+                f"a cut falls inside a run of '{col}': the parts hold {pieces} runs "
                 f"where the table holds {whole}. The run(s) cut: {detail}. Move the "
                 "boundary outside them, or override check_segments to allow it."
             )
@@ -156,9 +140,6 @@ class Splitter:
         """What each part holds, in the terms that decide whether it is usable."""
         total = sum(len(v) for v in parts.values())
         flags = [c for c in next(iter(parts.values())).columns if c.startswith("is_")]
-        # The three shares on one line, before the detail. How the rows divide is
-        # the first thing anyone wants from a split and the last thing they should
-        # have to work out by reading three numbers and dividing.
         logger.success(
             "{} = {} of {:,} rows, cut at {} and {}",
             " / ".join(PARTS),
@@ -169,10 +150,6 @@ class Splitter:
             logger.success("{:<11} {:>9,} rows ({:>5.1%})  {} -> {}",
                            part, len(p), len(p) / total, p.index[0], p.index[-1])
             for col in flags:
-                # The base rate per part is the number that decides whether the
-                # split is usable at all: a training part with positives in it is
-                # not a clean baseline, and a validation part without any cannot
-                # tune a threshold.
                 k = int(p[col].sum())
                 logger.success("            {:<14} {:>8,} ({:.2%})", col, k,
                                k / len(p))
