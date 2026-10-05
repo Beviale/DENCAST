@@ -23,10 +23,13 @@ class Preprocessor(ABC):
         name: str,
         start: Optional[str] = None,
         end: Optional[str] = None,
+        null_max: float = 0.30,
     ) -> None:
         self.source = Path(source)
         self.out_dir = Path(out_dir)
         self.name = name
+        # A column missing at least this share of the recording is dropped.
+        self.null_max = null_max
         # Half-open [start, end): the end is excluded.
         self.start = pd.Timestamp(start) if start is not None else None
         self.end = pd.Timestamp(end) if end is not None else None
@@ -51,9 +54,42 @@ class Preprocessor(ABC):
         values = self.window(self.load_values())
         if values.empty:
             raise ValueError(f"no rows left in [{self.start}, {self.end})")
+        values = self.drop_sparse_columns(values)
+        values = self.drop_duplicate_rows(values)
         labels = self.load_labels(values.index)
         self.check_alignment(values, labels)
         yield pd.concat([values, labels], axis=1)
+
+    def drop_sparse_columns(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Drop any column missing at least `null_max` of the whole recording."""
+        share = df.isna().mean()
+        gone = [c for c in df.columns if share[c] >= self.null_max]
+        if not gone:
+            logger.info("no column is missing {:.0%} or more of the recording",
+                        self.null_max)
+            return df
+        logger.warning("dropping {} of {} columns missing {:.0%} or more:",
+                       len(gone), df.shape[1], self.null_max)
+        for c in sorted(gone, key=lambda c: -share[c]):
+            logger.warning("  {:<12} {:>9,} of {:,} rows missing ({:.1%})",
+                           c, int(df[c].isna().sum()), len(df), share[c])
+        return df.drop(columns=gone)
+
+    def drop_duplicate_rows(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Drop rows identical to an earlier one, timestamp included, keeping the
+        first. A repeat of the values alone is left in place."""
+        if df.index.is_unique:
+            logger.info("the index is unique: no row can repeat another, "
+                        "timestamp included")
+            return df
+        dup = df.reset_index().duplicated(keep="first").to_numpy()
+        if not dup.any():
+            logger.info("no row repeats an earlier one, timestamp included")
+            return df
+        logger.warning("dropping {:,} rows identical to an earlier one "
+                       "({:.3%}), keeping the first of each",
+                       int(dup.sum()), dup.mean())
+        return df.loc[~dup]
 
     # ------------------------------------------------------------- machinery
 

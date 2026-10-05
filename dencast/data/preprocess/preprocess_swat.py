@@ -25,7 +25,6 @@ class SwatPreprocessor(Preprocessor):
         out_dir: Path = Path("data/interim/swat"),
         name: str = "full_swat",
     ) -> None:
-        # No start/end: the whole recording is kept-
         super().__init__(source, out_dir, name, start=None, end=None)
         self._clean: Optional[pd.DataFrame] = None
         self._instruments: list[str] = []
@@ -34,7 +33,7 @@ class SwatPreprocessor(Preprocessor):
 
     @property
     def clean(self) -> pd.DataFrame:
-        """The csv with its three defects undone, indexed by timestamp."""
+        """The csv with its defects undone, indexed by timestamp."""
         if self._clean is None:
             self._clean = self._repair()
         return self._clean
@@ -44,7 +43,6 @@ class SwatPreprocessor(Preprocessor):
         logger.info("read {:,} rows x {} columns from {}",
                     len(raw), raw.shape[1], self.source)
 
-        # Fix column names
         raw.columns = [str(c).strip() for c in raw.columns]
         raw[LABEL] = (raw[LABEL].astype(str).str.strip()
                       .str.replace(" ", "", regex=False))
@@ -53,58 +51,21 @@ class SwatPreprocessor(Preprocessor):
         if set(labels_seen) - {"Normal", ATTACK}:
             raise ValueError(f"unexpected labels after normalising: {labels_seen}")
 
-        # Check exact duplicates across every column, timestamp included.
-        dup = raw.duplicated(keep="first")
-        logger.info("duplicate rows: {:,} of {:,} ({:.1%}), {:,} instants remain",
-                    int(dup.sum()), len(raw), dup.mean(), int((~dup).sum()))
-        raw = raw.loc[~dup]
-
         ts = pd.to_datetime(raw[TIME], format=TIME_FORMAT)
-        raw = raw.set_index(pd.DatetimeIndex(ts.to_numpy(), name="datetime"))
-        # Stable, so rows sharing a timestamp keep their published order rather
-        # than an arbitrary one.
-        raw = raw.sort_index(kind="stable")
-        if not raw.index.is_unique:
-            logger.warning("{:,} rows share a timestamp with another after "
-                           "de-duplication", int(raw.index.duplicated().sum()))
+        raw = (raw.drop(columns=[TIME])
+                  .set_axis(pd.DatetimeIndex(ts.to_numpy(), name="datetime"))
+                  .sort_index(kind="stable"))
 
-        instruments = [c for c in raw.columns if c not in (TIME, LABEL)]
-        raw = raw.drop(columns=[TIME])          # the index carries it now
+        raw = self.drop_duplicate_rows(raw)
+
+        instruments = [c for c in raw.columns if c != LABEL]
         raw[instruments] = (raw[instruments].apply(pd.to_numeric, errors="coerce")
                             .astype("float32"))
-        span = raw.index[-1] - raw.index[0]
-        logger.info("{:,} rows from {} to {} ({} of wall clock)",
-                    len(raw), raw.index[0], raw.index[-1], span)
+        self._instruments = instruments
 
-  
-        raw = self._drop_incomplete(raw, instruments)
-        self._instruments = [c for c in raw.columns if c != LABEL]
+        logger.info("{:,} rows from {} to {}, {} instruments",
+                    len(raw), raw.index[0], raw.index[-1], len(self._instruments))
         return self._regularise(raw)
-
-    
-    def _drop_incomplete(self, raw: pd.DataFrame, instruments: list[str]) -> pd.DataFrame:
-        """Remove instruments that have more than 30% missing values."""
-        
-        missing = raw[instruments].isna().sum()
-        
-        threshold = 0.3 * len(raw)
-        incomplete = missing[missing > threshold]
-        
-        if len(incomplete):
-            logger.warning("dropping {} of {} instruments with more than 30% missing values:", 
-                        len(incomplete), len(instruments))
-            for c, k in incomplete.sort_values(ascending=False).items():
-                pct = k / len(raw) * 100
-                logger.warning("  {:<7} {:>9,} missing rows ({:.1f}%), first reading {}",
-                            c, int(k), pct, raw[c].first_valid_index())
-            raw = raw.drop(columns=incomplete.index)
-            
-        logger.info("{} instruments kept, {:,} missing cells among the recorded rows",
-                    len(instruments) - len(incomplete),
-                    int(raw[[c for c in instruments if c not in incomplete.index]]
-                        .isna().to_numpy().sum()))
-        return raw
-
 
     def _regularise(self, raw: pd.DataFrame) -> pd.DataFrame:
         """Report the discontinuities and keep only the instants that were logged."""
@@ -135,13 +96,10 @@ class SwatPreprocessor(Preprocessor):
         values = self.clean[self._instruments]
         holes = int(values.isna().to_numpy().sum())
         logger.info("{} instruments, {:,} missing cells", values.shape[1], holes)
-        if holes:
-            logger.warning(f"{holes:,} cells are missing after the totally incomplete "
-                             "columns were dropped.")
         return values
 
     def load_labels(self, index: pd.DatetimeIndex) -> pd.DataFrame:
-        is_attack = (self.clean[LABEL].to_numpy() == ATTACK).astype("uint8")
+        is_attack = (self.clean[LABEL].loc[index].to_numpy() == ATTACK).astype("uint8")
         labels = pd.DataFrame({"is_attack": is_attack}, index=index)
 
         a = labels["is_attack"].to_numpy()
