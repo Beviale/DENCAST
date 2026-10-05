@@ -15,8 +15,6 @@ DIRTY = ("is_anomaly", "is_rare_event")
 
 
 class EsaSplitter(Splitter):
-    """Chronological, with the lead-in dropped and the training part cleaned."""
-
     def __init__(
         self,
         source: Path = Path("data/interim/esa/full_esa.parquet"),
@@ -24,36 +22,27 @@ class EsaSplitter(Splitter):
         valid_start: str = VALID_START,
         test_start: str = TEST_START,
         name: str = "esa",
-        clean_train: bool = True,
+        lead_in_end: str = LEAD_IN_END,
     ) -> None:
         super().__init__(source, out_dir, valid_start, test_start, name)
-        self.clean_train = clean_train
+        self.lead_in_end = pd.Timestamp(lead_in_end)
 
+    def load(self) -> pd.DataFrame:
+        df = super().load()
+        keep = df.index >= self.lead_in_end
+        dropped = int((~keep).sum())
+        if dropped:
+            logger.info("dropping the lead-in: {:,} rows before {} ({:.2%} of the "
+                        "table), where 99 of 100 channels have yet to report",
+                        dropped, self.lead_in_end, dropped / len(df))
+        return df.loc[keep]
 
     def cut(self, df: pd.DataFrame) -> dict[str, pd.DataFrame]:
         parts = super().cut(df)
-        if not self.clean_train:
-            train = parts["train"]
-            for c in [c for c in DIRTY if c in train.columns]:
-                k = int(train[c].to_numpy().sum())
-                logger.warning("the training part keeps {:,} rows flagged `{}` "
-                               "({:.2%}): the fit is contaminated by design", k, c,
-                               k / len(train))
-            return parts
         train = parts["train"]
-        flags = [c for c in DIRTY if c in train.columns]
-        dirty = np.zeros(len(train), dtype=bool)
-        for c in flags:
-            dirty |= train[c].to_numpy() != 0
-        logger.info("cleaning the training part: dropping {:,} of {:,} rows "
-                    "({:.2%}) flagged by {}", int(dirty.sum()), len(train),
-                    dirty.mean(), " or ".join(flags))
-        for c in flags:
+        for c in [c for c in DIRTY if c in train.columns]:
             k = int(train[c].to_numpy().sum())
-            logger.info("    {:<14} {:>8,} rows", c, k)
-        parts["train"] = train.loc[~dirty]
-        if parts["train"].empty:
-            raise ValueError("the training part is empty once cleaned")
+            logger.info("the training part carries {:,} rows flagged `{}` ({:.2%}); ", k, c, k / len(train))
         return parts
 
     def check_segments(self, df: pd.DataFrame, parts: dict[str, pd.DataFrame]) -> None:

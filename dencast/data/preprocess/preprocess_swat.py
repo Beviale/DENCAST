@@ -73,7 +73,7 @@ class SwatPreprocessor(Preprocessor):
         gaps = np.diff(raw.index.to_numpy()).astype("timedelta64[s]").astype("int64")
         broken = np.flatnonzero(gaps != 1)
         if len(broken) == 0:
-            logger.info("the series is continuous: every second present")
+            logger.info("the series is numeric: every second present")
         else:
             logger.warning("{} discontinuities, {:,} seconds missing from the source",
                            len(broken), int(gaps[broken].sum() - len(broken)))

@@ -1,5 +1,3 @@
-"""Fit on train, apply to all three splits, then check what the result still holds."""
-
 from __future__ import annotations
 
 from pathlib import Path
@@ -8,6 +6,7 @@ from typing import Optional, Sequence
 from loguru import logger
 import numpy as np
 import pandas as pd
+from scipy.stats import chi2_contingency
 
 PARTS = ("train", "validation", "test")
 
@@ -20,14 +19,24 @@ class Processor:
         split_dir: Path,
         out_dir: Path,
         name: str,
-        max_levels: int = 5,
-        categorical: Optional[Sequence[str]] = None,
+        categorical: Sequence[str],
+        pearson_max: float = 0.99,
+        cramer_max: float = 0.99,
     ) -> None:
         self.split_dir = Path(split_dir)
         self.out_dir = Path(out_dir)
         self.name = name
-        self.max_levels = max_levels
-        self.given_categorical = None if categorical is None else list(categorical)
+        if categorical is None:
+            raise ValueError(
+                "the categorical columns must be given!")
+        self.given_categorical = list(categorical)
+        # A pair above either threshold is one quantity reported twice. A copy is dropped. For numeric variables.
+        self.pearson_max = pearson_max
+        # A pair above either threshold is one quantity reported twice. A copy is dropped. For categorical variables.
+        self.cramer_max = cramer_max
+        self.dropped_numeric: list[tuple[str, str, float]] = []
+        self.dropped_categorical: list[tuple[str, str, float]] = []
+        self.constant: list[str] = []
         self.numeric: list[str] = []
         self.categorical: list[str] = []
         self.mean: pd.Series = pd.Series(dtype="float64")
@@ -45,46 +54,48 @@ class Processor:
 
     @staticmethod
     def feature_columns(df: pd.DataFrame) -> list[str]:
-        """Everything that is not a label. Labels are carried through untouched."""
-        return [c for c in df.columns if not c.startswith("is_")]
+        """Everything that is not a label."""
+        return [c for c in df.columns
+                if not c.startswith("is_") and not c.startswith("label_")]
+
+    def prepare_train(self, train: pd.DataFrame) -> pd.DataFrame:
+        """Last chance to change the training rows before anything is fitted."""
+        return train
 
     # --------------------------------------------------------------------- fit
 
     def fit(self, train: pd.DataFrame) -> None:
         feats = self.feature_columns(train)
-        levels = train[feats].nunique()
-        guess = [c for c in feats if levels[c] <= self.max_levels]
         logger.info("fitted on {:,} training rows", len(train))
 
-        if self.given_categorical is None:
-            self.categorical = guess
-            logger.warning("  categorical columns inferred: at most {} distinct values "
-                        "in training", self.max_levels)
-        else:
-            absent = [c for c in self.given_categorical if c not in feats]
-            present = [c for c in self.given_categorical if c in feats]
-            if absent:
-                logger.warning(
-                    f"{len(absent)} of the {len(self.given_categorical)} columns "
-                    f"named as categorical are not in the data: {', '.join(absent)}"
-                )
-            self.categorical = present
-            logger.info("  categorical columns taken as given: {} named",
-                        len(self.categorical))
-            
+        absent = [c for c in self.given_categorical if c not in feats]
+        self.categorical = [c for c in self.given_categorical if c in feats]
+        if absent:
+            logger.warning(
+                f"{len(absent)} of the {len(self.given_categorical)} columns named as "
+                f"categorical are not in the data: {', '.join(absent)}"
+            )
+        logger.info("  categorical columns taken as given: {} named",
+                    len(self.categorical))
+
         self.numeric = [c for c in feats if c not in set(self.categorical)]
         logger.info("  {} numeric, {} categorical",
                     len(self.numeric), len(self.categorical))
         
+        self.drop_constant(train)
+        self.prune(train)
+
         self.mean = train[self.numeric].mean()
         self.std = train[self.numeric].std()
         self.median = train[self.numeric].median()
 
-        flat = self.std.index[self.std <= 1e-12].tolist()
+    
+        flat = self.std.index[self.std == 0].tolist()
         if flat:
-            logger.warning("  {} numeric columns are constant in training and are "
-                           "centred but not scaled: {}", len(flat), ", ".join(flat))
-            self.std = self.std.mask(self.std <= 1e-12, 1.0)
+            logger.warning("  {} numeric columns have zero spread in training yet "
+                           "survived the constant filter; centred but not scaled: {}",
+                           len(flat), ", ".join(flat))
+            self.std = self.std.mask(self.std == 0, 1.0)
 
         modes = {}
         for c in self.categorical:
@@ -101,10 +112,89 @@ class Processor:
         logger.info("  median fitted for {} numeric columns, mode for {} categorical",
                     len(self.median), len(self.mode))
 
+    def drop_constant(self, train: pd.DataFrame) -> None:
+        feats = self.numeric + self.categorical
+        levels = train[feats].nunique()
+        self.constant = [c for c in feats if levels[c] <= 1]
+        if not self.constant:
+            logger.info("  no column is constant across the training split")
+            return
+        gone = set(self.constant)
+        in_num = [c for c in self.numeric if c in gone]
+        in_cat = [c for c in self.categorical if c in gone]
+        self.numeric = [c for c in self.numeric if c not in gone]
+        self.categorical = [c for c in self.categorical if c not in gone]
+        logger.info("  constant across the whole training split: {} dropped "
+                    "({} numeric, {} categorical)",
+                    len(self.constant), len(in_num), len(in_cat))
+        logger.info("    {}", ", ".join(self.constant))
+
+    @staticmethod
+    def cramer_v(a: pd.Series, b: pd.Series) -> float:
+        table = pd.crosstab(a, b)
+        if min(table.shape) < 2:
+            return 0.0
+        chi2 = chi2_contingency(table)[0]
+        return float(np.sqrt(chi2 / (len(a) * (min(table.shape) - 1))))
+
+    def prune(self, train: pd.DataFrame) -> None:
+        before_num, before_cat = len(self.numeric), len(self.categorical)
+        levels = train[self.numeric + self.categorical].nunique()
+
+
+        def finest(cols: list[str]) -> list[str]:
+            return sorted(cols, key=lambda c: (-int(levels[c]), cols.index(c)))
+
+        corr = train[self.numeric].corr().abs() if self.numeric else None
+        keep, dropped = [], []
+        for c in finest(self.numeric):
+            hit = next((k for k in keep if corr.at[c, k] > self.pearson_max), None)
+            if hit is None:
+                keep.append(c)
+            else:
+                dropped.append((c, hit, float(corr.at[c, hit])))
+        kept = set(keep)
+        self.numeric = [c for c in self.numeric if c in kept]
+        self.dropped_numeric = dropped
+
+        keep, dropped = [], []
+        for c in finest(self.categorical):
+            hit = None
+            for k in keep:
+                v = self.cramer_v(train[c], train[k])
+                if v > self.cramer_max:
+                    hit = (k, v)
+                    break
+            if hit is None:
+                keep.append(c)
+            else:
+                dropped.append((c, hit[0], hit[1]))
+        kept = set(keep)
+        self.categorical = [c for c in self.categorical if c in kept]
+        self.dropped_categorical = dropped
+
+        logger.info("  redundancy filter: Pearson > {:.3f}, Cramer's V > {:.3f}, "
+                    "keeping the column with more distinct values",
+                    self.pearson_max, self.cramer_max)
+        logger.info("    numeric     {} -> {}  ({} dropped)", before_num,
+                    len(self.numeric), len(self.dropped_numeric))
+        for c, k, v in self.dropped_numeric:
+            logger.info("      {} ({:,} levels) dropped, r = {:+.4f} with {} ({:,})",
+                        c, int(levels[c]), v, k, int(levels[k]))
+        logger.info("    categorical {} -> {}  ({} dropped)", before_cat,
+                    len(self.categorical), len(self.dropped_categorical))
+        for c, k, v in self.dropped_categorical:
+            logger.info("      {} ({} levels) dropped, V = {:.4f} with {} ({})",
+                        c, int(levels[c]), v, k, int(levels[k]))
+        logger.info("    features    {} -> {}", before_num + before_cat,
+                    len(self.numeric) + len(self.categorical))
+
     # --------------------------------------------------------------- transform
 
     def transform(self, df: pd.DataFrame, part: str) -> pd.DataFrame:
-        out = df.copy()
+        gone = self.constant + [c for c, _, _ in
+                                self.dropped_numeric + self.dropped_categorical]
+        out = df.drop(columns=gone).copy()
 
         holes = out[self.numeric + self.categorical].isna()
         rows = int(holes.any(axis=1).sum())
@@ -130,7 +220,6 @@ class Processor:
     # ------------------------------------------------------------------- check
 
     def check(self, parts: dict[str, pd.DataFrame]) -> None:
-        """What survived. Reported whether or not anything did."""
         logger.info("final check")
         for part in PARTS:
             df = parts[part]
@@ -177,6 +266,7 @@ class Processor:
         for p in PARTS:
             logger.info("{:<11} {:>9,} rows x {} columns from {}",
                         p, len(raw[p]), raw[p].shape[1], self.in_path(p).name)
+        raw["train"] = self.prepare_train(raw["train"])
         self.fit(raw["train"])
 
         done = {p: self.transform(raw[p], p) for p in PARTS}
