@@ -6,4 +6,5 @@ kmeans:
     esa: 600
   seed: 42
   max_iter: 50
+  contaminated_refit: false
   workers: 4
