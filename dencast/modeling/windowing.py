@@ -1,4 +1,4 @@
-"""Turning a split directory into windowed feature frames, and the Spark session."""
+"""Turning a split directory into windowed feature frames. Activate the Spark session."""
 
 from __future__ import annotations
 
@@ -37,6 +37,7 @@ def session(app: str, workers: int = 4):
              # pandas writes the index as TIMESTAMP(NANOS), which Spark 3.5 refuses
              # outright. Read as a bigint of nanoseconds and convert where needed.
              .config("spark.sql.legacy.parquet.nanosAsLong", "true")
+             .config("spark.sql.codegen.maxFields", "30")
              .getOrCreate())
     spark.sparkContext.setLogLevel("ERROR")
     return spark
@@ -83,60 +84,104 @@ def _to_seconds(df, column: str = INDEX):
     return F.unix_timestamp(F.col(column))
 
 
-def window(df, columns: list[str], seconds: int, label: str,
-           categorical: list[str]):
-    """Aggregate to fixed windows on absolute time.
+import numpy as np
+import pandas as pd
+from pyspark.sql import functions as F
+from pyspark.sql.types import (
+    StructType,
+    StructField,
+    DoubleType,
+    LongType
+)
+from pyspark.ml.feature import VectorAssembler
+from pyspark.sql import functions as F
+
+def window(df, columns: list[str], seconds: int, label: str, categorical: list[str]):
+    """Aggregate to fixed windows on absolute time using PySpark applyInPandas.
 
     Numeric columns contribute the window's mean and standard deviation. Categorical
-    ones contribute four summaries: the mode, the Shannon entropy, the number of distinct states and the share of the
-    window spent in the dominant one.
+    ones contribute four summaries: the mode, the Shannon entropy, the number of distinct states,
+    and the share of the window spent in the dominant one.
+    
     """
-    from pyspark.sql import functions as F
-
+    numeric = [c for c in columns if c not in set(categorical)]
+    
     base = df.withColumn("_w", F.floor(_to_seconds(df) / seconds) * seconds)
 
-    numeric = [c for c in columns if c not in set(categorical)]
-    aggs = ([F.mean(c).alias(f"{c}_mean") for c in numeric]
-            + [F.coalesce(F.stddev_pop(c), F.lit(0.0)).alias(f"{c}_std")
-               for c in numeric]
-            + [F.max(label).alias(label), F.count(F.lit(1)).alias("_rows")])
-    out = base.groupBy("_w").agg(*aggs)
-    names = [f"{c}_mean" for c in numeric] + [f"{c}_std" for c in numeric]
-
+    schema_fields = [
+        StructField("_w", LongType(), True),
+        StructField(label, DoubleType(), True),
+        StructField("_rows", LongType(), True)
+    ]
+    
+    names = []
+    for c in numeric:
+        mean_col = f"{c}_mean"
+        std_col = f"{c}_std"
+        names.extend([mean_col, std_col])
+        schema_fields.append(StructField(mean_col, DoubleType(), True))
+        schema_fields.append(StructField(std_col, DoubleType(), True))
+        
     if categorical:
-        pair = F.explode(F.array(*[
-            F.struct(F.lit(c).alias("_c"), F.col(c).cast("double").alias("_v"))
-            for c in categorical]))
-        counts = (base.select("_w", pair.alias("_s"))
-                      .select("_w", F.col("_s._c").alias("_c"),
-                              F.col("_s._v").alias("_v"))
-                      .filter(F.col("_v").isNotNull())
-                      .groupBy("_w", "_c", "_v").agg(F.count(F.lit(1)).alias("_n")))
+        filled = [f"{c}_{k}" for c in categorical for k in ("mode", "entropy", "nunique", "maxprop")]
+        names.extend(filled)
+        for col_name in filled:
+            schema_fields.append(StructField(col_name, DoubleType(), True))
+            
+    out_schema = StructType(schema_fields)
 
-  
-        per = (counts.groupBy("_w", "_c")
-               .agg(F.sum("_n").alias("_N"), F.max("_n").alias("_top"),
-                    F.count(F.lit(1)).alias("_k"),
-                    F.sum(F.col("_n") * F.log(F.col("_n"))).alias("_nlogn"),
-                    F.max(F.struct(F.col("_n"), F.col("_v"))).alias("_arg"))
-               .select("_w", "_c",
-                       F.col("_arg._v").alias("mode"),
-                       (F.log("_N") - F.col("_nlogn") / F.col("_N")).alias("entropy"),
-                       F.col("_k").cast("double").alias("nunique"),
-                       (F.col("_top") / F.col("_N")).alias("maxprop")))
+    def process_window(key: tuple, pdf: pd.DataFrame) -> pd.DataFrame:
+        w_val = key[0]
+        row_count = len(pdf)
+        
+        row_dict = {
+            "_w": w_val,
+            label: float(pdf[label].max()) if label in pdf else 0.0,
+            "_rows": row_count
+        }
+        
+        for c in numeric:
+            vals = pdf[c].dropna()
+            if len(vals) > 0:
+                row_dict[f"{c}_mean"] = float(vals.mean())
+                std_val = float(vals.std(ddof=0))
+                row_dict[f"{c}_std"] = 0.0 if np.isnan(std_val) else std_val
+            else:
+                row_dict[f"{c}_mean"] = 0.0
+                row_dict[f"{c}_std"] = 0.0
+                logger.warning(f"The numeric column {c} does not contain any value!")
 
-        wide = (per.groupBy("_w").pivot("_c", categorical)
-                .agg(F.first("mode").alias("mode"),
-                     F.first("entropy").alias("entropy"),
-                     F.first("nunique").alias("nunique"),
-                     F.first("maxprop").alias("maxprop")))
-        filled = [f"{c}_{k}" for c in categorical
-                  for k in ("mode", "entropy", "nunique", "maxprop")]
-        names += filled
-        out = out.join(wide, on="_w", how="left").fillna(0.0, subset=filled)
+        if categorical:
+            for c in categorical:
+                s = pdf[c].dropna()
+                if len(s) == 0:
+                    logger.warning(f"The categorical column {c} does not contain any value!")
+                    row_dict[f"{c}_mode"] = 0.0
+                    row_dict[f"{c}_entropy"] = 0.0
+                    row_dict[f"{c}_nunique"] = 0.0
+                    row_dict[f"{c}_maxprop"] = 0.0
+                else:
+                    counts = s.value_counts()
+                    n_total = counts.sum()
+                    
+                    row_dict[f"{c}_mode"] = float(counts.idxmax())
+                    row_dict[f"{c}_nunique"] = float(len(counts))
+                    row_dict[f"{c}_maxprop"] = float(counts.max() / n_total)
+                    
+                    probs = counts / n_total
+                    entropy_val = -float((probs * np.log(probs)).sum())
+                    if np.isnan(entropy_val):                     
+                        logger.warning(f"The calculated entropy is not valid!")
+                    row_dict[f"{c}_entropy"] = 0.0 if np.isnan(entropy_val) else entropy_val
 
-    out = (out.withColumn(INDEX, F.timestamp_seconds("_w")).drop("_w")
-              .orderBy(INDEX))
+        return pd.DataFrame([row_dict])
+
+    out = base.groupBy("_w").applyInPandas(process_window, schema=out_schema)
+
+    out = out.withColumn(INDEX, F.timestamp_seconds("_w")).drop("_w")
+
+    logger.info(f"Aggregated the data into {out.count()} windows!") 
+       
     return out, names
 
 
@@ -144,8 +189,6 @@ def prepare(spark, files: dict[str, Path], categorical: Sequence[str],
             window_seconds: int, parts: Sequence[str] = PARTS,
             features: Optional[Sequence[str]] = None) -> dict:
     """Read the parts, window them, assemble the feature vector."""
-    from pyspark.ml.feature import VectorAssembler
-    from pyspark.sql import functions as F
 
     raw = {p: spark.read.parquet(str(files[p].resolve())) for p in parts}
     first = raw[parts[0]]
@@ -160,6 +203,7 @@ def prepare(spark, files: dict[str, Path], categorical: Sequence[str],
     if window_seconds and window_seconds > 1:
         frames, built = {}, None
         for p in parts:
+            logger.info(f"Creating the windows for the {p} split...")
             frames[p], built = window(raw[p], columns, window_seconds, label, cat)
         logger.info("windowed at {} s: {} columns -> {} features (mean and std of "
                     "each numeric, mode/entropy/nunique/maxprop of each categorical)",
@@ -184,30 +228,12 @@ def prepare(spark, files: dict[str, Path], categorical: Sequence[str],
 
     assembler = VectorAssembler(inputCols=list(built), outputCol="features")
     vec = {p: assembler.transform(frames[p])
-                       .select(INDEX, *built, "features", label).cache()
+                       .select(INDEX, "features", label).cache()
            for p in parts}
     return {"vec": vec, "features": list(built), "label": label,
-            "columns": columns, "categorical": cat, "rows": rows}
+            "columns": columns, "rows": rows}
 
-
-def scores(centroids: Sequence[Sequence[float]], frame,
-           features: Sequence[str]):
-    """Distance from each row to its nearest centroid, as a Spark column expression."""
-    from pyspark.sql import functions as F
-
-    if not centroids:
-        raise ValueError("no centroids: there is nothing to measure a distance to")
-    per_centre = []
-    for centre in centroids:
-        if len(centre) != len(features):
-            raise ValueError(
-                f"a centroid has {len(centre)} coordinates and the feature space has "
-                f"{len(features)} columns")
-        terms = [(F.col(f) - F.lit(float(v))) ** 2 for f, v in zip(features, centre)]
-        per_centre.append(reduce(lambda a, b: a + b, terms))
-    nearest = F.least(*per_centre) if len(per_centre) > 1 else per_centre[0]
-    return F.sqrt(nearest)
 
 
 __all__ = ["PARTS", "INDEX", "session", "discover", "feature_columns",
-           "label_column", "window", "prepare", "scores"]
+           "label_column", "window", "prepare"]
