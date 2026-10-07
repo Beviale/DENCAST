@@ -112,7 +112,7 @@ def train_k_means(
 
     spark = W.session(f"kmeans-train-{dataset}", workers)
     try:
-        parts = ("train", "validation")
+        parts = W.PARTS
         prep = W.prepare(spark, files, declared_categorical(dataset),
                          window_seconds, parts)
         vec, features, label = prep["vec"], prep["features"], prep["label"]
@@ -142,9 +142,9 @@ def train_k_means(
             search.append({"k": int(k), **m})
             logger.info("  k={:<3} validation AP {:.4f} ROC-AUC {:.4f}", k, m["average_precision"], m["roc_auc"])
 
-        best = max(search, key=lambda r: r["average_precision"])
+        best = max(search, key=lambda r: r["roc_auc"])
         k_star, best_threshold, best_average_precision = best["k"], best["threshold"], best["average_precision"]
-        logger.success("selected k={} on validation AveragePrecision {:.4f}, threshold selected={:.4f}",
+        logger.success("selected k={} on validation ROC-AUC {:.4f}, threshold selected={:.4f}",
                        k_star, best_average_precision, best_threshold)
 
         if contaminated_refit:
@@ -159,7 +159,7 @@ def train_k_means(
         vec_test = vec["test"].withColumn("features_arr", vector_to_array("features"))
         final = KMeans(k=k_star, seed=seed, maxIter=max_iter,
                        featuresCol="features").fit(refit)
-        centroids = model.clusterCenters()
+        centroids = final.clusterCenters()
         s_df = vec_test.select(
             get_distributed_scorer(centroids)(F.col("features_arr")).alias("_s")
         )
@@ -170,7 +170,8 @@ def train_k_means(
 
         contract_out = models_dir / f"kmeans_{split_dir.name}_{window_seconds}s"
         contract_out.mkdir(parents=True, exist_ok=True)
-        test_out = reports_dir /f"kmeans_{split_dir.name}_{window_seconds}s"
+        test_out = reports_dir / f"kmeans_{split_dir.name}_{window_seconds}s"
+        test_out.mkdir(parents=True, exist_ok=True)
         centroids = [[float(x) for x in c] for c in final.clusterCenters()]
 
         contract = {
@@ -181,7 +182,7 @@ def train_k_means(
                 "score": "euclidean distance to the nearest centroid",
                 "k_candidates": [int(k) for k in k_values],
                 "k_selected": k_star,
-                "selected_by": "validation AveragePrecision",
+                "selected_by": "validation ROC-AUC",
                 "seed": seed,
                 "max_iter": max_iter,
                 "refit_on": note,
@@ -213,7 +214,7 @@ def train_k_means(
                 "score": "euclidean distance to the nearest centroid",
                 "k_candidates": [int(k) for k in k_values],
                 "k_selected": k_star,
-                "selected_by": "validation AveragePrecision",
+                "selected_by": "validation ROC-AUC",
                 "seed": seed,
                 "max_iter": max_iter,
                 "refit_on": note,

@@ -180,8 +180,6 @@ def window(df, columns: list[str], seconds: int, label: str, categorical: list[s
 
     out = out.withColumn(INDEX, F.timestamp_seconds("_w")).drop("_w")
 
-    logger.info(f"Aggregated the data into {out.count()} windows!") 
-       
     return out, names
 
 
