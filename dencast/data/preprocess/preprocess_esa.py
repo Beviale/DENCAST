@@ -33,7 +33,7 @@ class EsaPreprocessor(Preprocessor):
         # The interval of the common grid every channel is resampled onto, as a pandas
         # frequency string.
         self.rule = rule
-        # If True, load only the 47 channels `channels.csv` marks Target=YES, instead of all 100.
+        # If True, load only the 47 channels 'channels.csv' marks Target=YES, instead of all 100.
         self.target_only = target_only 
         # Before a channel first reports there is nothing to hold forward, so the
         # grid starts with NaN and keeps it. 
@@ -89,7 +89,7 @@ class EsaPreprocessor(Preprocessor):
 
     def _resample(self, name: str, grid: pd.DatetimeIndex) -> np.ndarray:
         df = pd.read_pickle(self.source / "channels" / f"{name}.zip")
-        s = df[name] if name in df.columns else df.iloc[:, 0]
+        s = df[name]
         if s.dtype == object:
             # Ten channels are flagged Categorical; factorising keeps them in the
             # table as integer codes.
@@ -128,7 +128,10 @@ class EsaPreprocessor(Preprocessor):
         mat = np.empty((len(grid), len(self.channels)), dtype=np.float32)
         for i, name in enumerate(self.channels):
             mat[:, i] = self._resample(name, grid)
-        return pd.DataFrame(mat, index=grid, columns=self.channels, copy=False)
+        full_df = pd.DataFrame(mat, index=grid, columns=self.channels, copy=False)
+        holes = int(full_df.isna().to_numpy().sum())
+        logger.info("{} instruments, {:,} missing cells", full_df.shape[1], holes)
+        return full_df
 
     # ----------------------------------------------------------------- labels
 
@@ -187,6 +190,8 @@ class EsaPreprocessor(Preprocessor):
                 idx = grid[lo:hi]
                 values = pd.DataFrame(
                     {c: np.asarray(m[lo:hi]) for c, m in maps.items()}, index=idx)
+                holes = int(values.isna().to_numpy().sum())
+                logger.info("{} instruments, {:,} missing cells", values.shape[1], holes)
                 labels = self.load_labels(idx)
                 self.check_alignment(values, labels)
                 n_anom += int(labels["is_anomaly"].sum())
