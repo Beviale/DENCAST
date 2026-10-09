@@ -46,26 +46,41 @@ class Preprocessor(ABC):
         values = self.window(self.load_values())
         if values.empty:
             raise ValueError(f"no rows left in [{self.start}, {self.end})")
-        values = self.drop_duplicate_rows(values)
+        values = self.drop_duplicate_and_null_rows(values)
         labels = self.load_labels(values.index)
         self.check_alignment(values, labels)
         yield pd.concat([values, labels], axis=1)
 
-    def drop_duplicate_rows(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Drop rows identical to an earlier one, timestamp included, keeping the
-        first. A repeat of the values alone is left in place."""
+    def drop_duplicate_and_null_rows(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Drop rows that repeat an earlier one, and rows carrying no reading at all."""
+        before = len(df)
+
+        blank = df.isna().all(axis=1).to_numpy()
+        if blank.any():
+            logger.warning("dropping {:,} rows ({:.3%}) with no reading in any of "
+                           "the {} feature columns", int(blank.sum()), blank.mean(),
+                           df.shape[1])
+            df = df.loc[~blank]
+        else:
+            logger.info("every row carries a reading in at least one of the {} "
+                        "feature columns", df.shape[1])
+
         if df.index.is_unique:
             logger.info("the index is unique: no row can repeat another, "
                         "timestamp included")
-            return df
-        dup = df.reset_index().duplicated(keep="first").to_numpy()
-        if not dup.any():
-            logger.info("no row repeats an earlier one, timestamp included")
-            return df
-        logger.warning("dropping {:,} rows identical to an earlier one "
-                       "({:.3%}), keeping the first of each",
-                       int(dup.sum()), dup.mean())
-        return df.loc[~dup]
+        else:
+            dup = df.reset_index().duplicated(keep="first").to_numpy()
+            if dup.any():
+                logger.warning("dropping {:,} rows identical to an earlier one "
+                               "({:.3%}), keeping the first of each",
+                               int(dup.sum()), dup.mean())
+                df = df.loc[~dup]
+            else:
+                logger.info("no row repeats an earlier one, timestamp included")
+
+        if len(df) != before:
+            logger.info("{:,} rows kept of {:,}", len(df), before)
+        return df
 
     # ------------------------------------------------------------- machinery
 
