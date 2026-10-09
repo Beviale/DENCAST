@@ -121,28 +121,6 @@ class EsaPreprocessor(Preprocessor):
                 logger.info("    {:<14} {:>9,} NaN rows ({:.1f} days)",
                             name, n, n * step / 86400)
 
-    def _drop_sparse_channels(self) -> None:
-        """Drop channels missing at least `null_max` of the grid.
-        """
-        n = len(self.grid)
-        share = {c: self._lead.get(c, 0) / n for c in self.channels}
-        gone = [c for c in self.channels if share[c] >= self.null_max]
-        if not gone:
-            worst = max(share, key=share.get)
-            logger.info("no channel is missing {:.0%} or more of the grid "
-                        "(worst: {} at {:.2%})", self.null_max, worst, share[worst])
-            return
-        logger.warning("dropping {} of {} channels missing {:.0%} or more of the "
-                       "grid:", len(gone), len(self.channels), self.null_max)
-        for c in sorted(gone, key=lambda c: -share[c]):
-            logger.warning("  {:<14} {:>9,} of {:,} rows missing ({:.1%})",
-                           c, self._lead.get(c, 0), n, share[c])
-        lost = self.annotations[self.annotations["Channel"].isin(gone)]
-        if len(lost):
-            logger.warning("  this also drops {} annotations that are only on those "
-                           "channels", len(lost))
-        self._channels = [c for c in self.channels if c not in set(gone)]
-
     # ----------------------------------------------------------------- values
 
     def load_values(self) -> pd.DataFrame:
@@ -199,7 +177,6 @@ class EsaPreprocessor(Preprocessor):
         logger.info("caching resampled channels under {}", cache)
         try:
             self._cache_channels(cache)
-            self._drop_sparse_channels()
             if not grid.is_unique:
                 raise ValueError("the grid is not unique; rows could duplicate")
             logger.info("the grid is unique")

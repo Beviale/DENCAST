@@ -14,7 +14,7 @@ from dencast.data.preprocess.preprocess import Preprocessor
 TIME = "timestamp"
 LABEL = "label"
 FILES = ("hai-train1", "hai-train2", "hai-test2")
-LABEL_FOR = {"hai-test1": "label-test1", "hai-test2": "label-test2"}
+LABEL_FOR = {"hai-test2": "label-test2"}
 
 
 class HaiPreprocessor(Preprocessor):
