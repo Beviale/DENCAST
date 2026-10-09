@@ -45,12 +45,7 @@ class Preprocessor(ABC):
         """Label columns on exactly 'index'. Must not reindex or reorder it."""
 
     def iter_blocks(self) -> Iterator[pd.DataFrame]:
-        """Yield the output in row blocks, values and labels already joined.
-
-        The default builds the whole thing at once, which is fine for a dataset
-        that fits comfortably in memory. A subclass whose table does not should
-        override this and yield pieces instead.
-        """
+        """Yield the output in row blocks, values and labels already joined."""
         values = self.window(self.load_values())
         if values.empty:
             raise ValueError(f"no rows left in [{self.start}, {self.end})")
@@ -61,7 +56,7 @@ class Preprocessor(ABC):
         yield pd.concat([values, labels], axis=1)
 
     def drop_sparse_columns(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Drop any column missing at least `null_max` of the whole recording."""
+        """Drop any column missing at least 'null_max' of the whole recording."""
         share = df.isna().mean()
         gone = [c for c in df.columns if share[c] >= self.null_max]
         if not gone:
