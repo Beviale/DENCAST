@@ -42,22 +42,9 @@ class EsaSplitter(Splitter):
         train = parts["train"]
         for c in [c for c in DIRTY if c in train.columns]:
             k = int(train[c].to_numpy().sum())
-            logger.info("the training part carries {:,} rows flagged `{}` ({:.2%}); ", k, c, k / len(train))
+            logger.info("the training part carries {:,} rows flagged '{}' ({:.2%}); ", k, c, k / len(train))
         return parts
 
-    def check_segments(self, df: pd.DataFrame, parts: dict[str, pd.DataFrame]) -> None:
-        later = df.loc[df.index >= self.valid_start]
-        for col in [c for c in df.columns if c.startswith("is_")]:
-            whole = self.segments(later[col].to_numpy())
-            pieces = sum(self.segments(parts[p][col].to_numpy())
-                         for p in ("validation", "test"))
-            if pieces != whole:
-                raise ValueError(
-                    f"the test cut falls inside a run of `{col}`: validation and "
-                    f"test hold {pieces} runs where the stretch from "
-                    f"{self.valid_start} holds {whole}"
-                )
-        logger.info("neither cut falls inside a labelled run")
 
 
 def main() -> None:

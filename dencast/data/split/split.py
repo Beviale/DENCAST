@@ -16,8 +16,7 @@ class Splitter:
     """Cut a time-ordered table into three parts on two timestamps.
 
     'valid_start' opens the validation part and 'test_start' opens the test part, so
-    the training part is everything before the first of them. Both are exclusive
-    upper bounds for the part that precedes them.
+    the training part is everything before the first of them.
     """
 
     def __init__(
@@ -45,7 +44,7 @@ class Splitter:
         return self.out_dir / f"{self.name}_{part}.parquet"
 
     def load(self) -> pd.DataFrame:
-        """The table to cut. A subclass with a different source overrides this."""
+        """The table to cut."""
         return pd.read_parquet(self.source)
 
     def check_order(self, df: pd.DataFrame) -> None:
@@ -93,7 +92,7 @@ class Splitter:
 
     def check_segments(self, df: pd.DataFrame, parts: dict[str, pd.DataFrame]) -> None:
         """Refuse a cut that falls inside a labelled event."""
-        for col in [c for c in df.columns if c.startswith("is_")]:
+        for col in [c for c in df.columns if c.startswith("is_") or c.startswith("label_")]:
             whole = self.segments(df[col].to_numpy())
             pieces = sum(self.segments(parts[p][col].to_numpy()) for p in PARTS)
             if pieces == whole:
