@@ -82,9 +82,7 @@ class HaiPreprocessor(Preprocessor):
 
         values = pd.concat(frames).sort_index(kind="stable")
         self._labels = pd.concat(labels).sort_index(kind="stable")
-        if not values.index.is_unique:
-            logger.warning("{:,} instants appear in more than one run; the "
-                           "duplicates are removed next", int(values.index.duplicated().sum()))
+       
 
         step = np.diff(values.index.to_numpy()).astype("timedelta64[s]").astype("int64")
         logger.info("{:,} rows x {} tags, {} to {}", len(values), values.shape[1],
