@@ -39,8 +39,6 @@ class Processor:
         self.constant: list[str] = []
         self.numeric: list[str] = []
         self.categorical: list[str] = []
-        self.mean: pd.Series = pd.Series(dtype="float64")
-        self.std: pd.Series = pd.Series(dtype="float64")
         self.median: pd.Series = pd.Series(dtype="float64")
         self.mode: pd.Series = pd.Series(dtype="float64")
 
@@ -85,17 +83,7 @@ class Processor:
         self.drop_constant(train)
         self.prune(train)
 
-        self.mean = train[self.numeric].mean()
-        self.std = train[self.numeric].std()
         self.median = train[self.numeric].median()
-
-    
-        flat = self.std.index[self.std == 0].tolist()
-        if flat:
-            logger.warning("  {} numeric columns have zero spread in training yet "
-                           "survived the constant filter; centred but not scaled: {}",
-                           len(flat), ", ".join(flat))
-            self.std = self.std.mask(self.std == 0, 1.0)
 
         modes = {}
         for c in self.categorical:
@@ -214,7 +202,6 @@ class Processor:
             if len(self.mode):
                 out[self.categorical] = out[self.categorical].fillna(self.mode)
 
-        out[self.numeric] = (out[self.numeric] - self.mean) / self.std
         return out
 
     # ------------------------------------------------------------------- check
