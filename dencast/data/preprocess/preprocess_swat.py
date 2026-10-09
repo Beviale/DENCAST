@@ -56,7 +56,7 @@ class SwatPreprocessor(Preprocessor):
                   .set_axis(pd.DatetimeIndex(ts.to_numpy(), name="datetime"))
                   .sort_index(kind="stable"))
 
-        raw = self.drop_duplicate_rows(raw)
+        raw = self.drop_duplicate_and_null_rows(raw)
 
         instruments = [c for c in raw.columns if c != LABEL]
         raw[instruments] = (raw[instruments].apply(pd.to_numeric, errors="coerce")
@@ -80,13 +80,7 @@ class SwatPreprocessor(Preprocessor):
             for k in broken[:5]:
                 logger.warning("  {} -> {}  ({:,} s), left as a gap rather than "
                                "filled", raw.index[k], raw.index[k + 1], int(gaps[k]))
-
-        inst = [c for c in raw.columns if c != LABEL]
-        blank = raw[inst].isna().all(axis=1)
-        if blank.any():
-            logger.warning("dropping {:,} rows that are empty across all {} "
-                           "instruments", int(blank.sum()), len(inst))
-            raw = raw.loc[~blank]
+                
         logger.info("{:,} rows kept, all of them instants that were logged", len(raw))
         return raw
 
