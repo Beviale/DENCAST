@@ -20,6 +20,7 @@ class Processor:
         out_dir: Path,
         name: str,
         categorical: Sequence[str],
+        null_max: float = 0.30,
         pearson_max: float = 0.99,
         cramer_max: float = 0.99,
     ) -> None:
@@ -30,12 +31,15 @@ class Processor:
             raise ValueError(
                 "the categorical columns must be given!")
         self.given_categorical = list(categorical)
+        # A column missing at least this share OF training rows is dropped.
+        self.null_max = null_max
         # A pair above either threshold is one quantity reported twice. A copy is dropped. For numeric variables.
         self.pearson_max = pearson_max
         # A pair above either threshold is one quantity reported twice. A copy is dropped. For categorical variables.
         self.cramer_max = cramer_max
         self.dropped_numeric: list[tuple[str, str, float]] = []
         self.dropped_categorical: list[tuple[str, str, float]] = []
+        self.sparse: list[str] = []
         self.constant: list[str] = []
         self.numeric: list[str] = []
         self.categorical: list[str] = []
@@ -79,7 +83,9 @@ class Processor:
         self.numeric = [c for c in feats if c not in set(self.categorical)]
         logger.info("  {} numeric, {} categorical",
                     len(self.numeric), len(self.categorical))
-        
+
+
+        self.drop_sparse(train)
         self.drop_constant(train)
         self.prune(train)
 
@@ -99,6 +105,24 @@ class Processor:
         self.mode = pd.Series(modes, dtype="float64")
         logger.info("  median fitted for {} numeric columns, mode for {} categorical",
                     len(self.median), len(self.mode))
+
+    def drop_sparse(self, train: pd.DataFrame) -> None:
+        """Drop any column missing at least 'null_max' of the training rows."""
+        share = train[self.numeric + self.categorical].isna().mean()
+        gone = sorted(share.index[share >= self.null_max])
+        if not gone:
+            logger.info("  no column is missing {:.0%} or more of the training rows",
+                        self.null_max)
+            return
+        logger.warning("  dropping {} columns missing {:.0%} or more of the "
+                       "training rows:", len(gone), self.null_max)
+        for c in gone:
+            logger.warning("    {:<14} {:>9,} of {:,} training rows missing ({:.1%})",
+                           c, int(train[c].isna().sum()), len(train), share[c])
+        self.sparse = gone
+        drop = set(gone)
+        self.numeric = [c for c in self.numeric if c not in drop]
+        self.categorical = [c for c in self.categorical if c not in drop]
 
     def drop_constant(self, train: pd.DataFrame) -> None:
         feats = self.numeric + self.categorical
@@ -133,6 +157,16 @@ class Processor:
         def finest(cols: list[str]) -> list[str]:
             return sorted(cols, key=lambda c: (-int(levels[c]), cols.index(c)))
 
+        def spread(c: str) -> float:
+            """Shannon entropy"""
+            p = train[c].value_counts(normalize=True).to_numpy()
+            if len(p) < 2:
+                return 0.0
+            return float(-(p * np.log(p)).sum() / np.log(len(p)))
+
+        def evenest(cols: list[str]) -> list[str]:
+            return sorted(cols, key=lambda c: (-spread(c), cols.index(c)))
+
         corr = train[self.numeric].corr().abs() if self.numeric else None
         keep, dropped = [], []
         for c in finest(self.numeric):
@@ -146,7 +180,7 @@ class Processor:
         self.dropped_numeric = dropped
 
         keep, dropped = [], []
-        for c in finest(self.categorical):
+        for c in evenest(self.categorical):
             hit = None
             for k in keep:
                 v = self.cramer_v(train[c], train[k])
@@ -161,8 +195,9 @@ class Processor:
         self.categorical = [c for c in self.categorical if c in kept]
         self.dropped_categorical = dropped
 
-        logger.info("  redundancy filter: Pearson > {:.3f}, Cramer's V > {:.3f}, "
-                    "keeping the column with more distinct values",
+        logger.info("  redundancy filter: Pearson > {:.3f}, Cramer's V > {:.3f}; "
+                    "keeping the numeric column with more distinct values and the "
+                    "categorical one with the higher normalised entropy",
                     self.pearson_max, self.cramer_max)
         logger.info("    numeric     {} -> {}  ({} dropped)", before_num,
                     len(self.numeric), len(self.dropped_numeric))
@@ -172,16 +207,17 @@ class Processor:
         logger.info("    categorical {} -> {}  ({} dropped)", before_cat,
                     len(self.categorical), len(self.dropped_categorical))
         for c, k, v in self.dropped_categorical:
-            logger.info("      {} ({} levels) dropped, V = {:.4f} with {} ({})",
-                        c, int(levels[c]), v, k, int(levels[k]))
+            logger.info("      {} ({} levels, H {:.4f}) dropped, V = {:.4f} with "
+                        "{} ({} levels, H {:.4f})", c, int(levels[c]), spread(c), v,
+                        k, int(levels[k]), spread(k))
         logger.info("    features    {} -> {}", before_num + before_cat,
                     len(self.numeric) + len(self.categorical))
 
     # --------------------------------------------------------------- transform
 
     def transform(self, df: pd.DataFrame, part: str) -> pd.DataFrame:
-        gone = self.constant + [c for c, _, _ in
-                                self.dropped_numeric + self.dropped_categorical]
+        gone = self.sparse + self.constant + [
+            c for c, _, _ in self.dropped_numeric + self.dropped_categorical]
         out = df.drop(columns=gone).copy()
 
         holes = out[self.numeric + self.categorical].isna()
@@ -201,13 +237,12 @@ class Processor:
             out[self.numeric] = out[self.numeric].fillna(self.median)
             if len(self.mode):
                 out[self.categorical] = out[self.categorical].fillna(self.mode)
-
         return out
 
     # ------------------------------------------------------------------- check
 
     def check(self, parts: dict[str, pd.DataFrame]) -> None:
-        logger.info("final check")
+        logger.info("=========final check========")
         for part in PARTS:
             df = parts[part]
             feats = self.feature_columns(df)
@@ -227,18 +262,6 @@ class Processor:
             if dup:
                 say("              {:,} timestamps carry more than one row",
                     int(df.index.duplicated().sum()))
-
-            by_feat = pd.util.hash_pandas_object(df[feats], index=False)
-            for col in [c for c in df.columns if c.startswith("is_")]:
-                votes = pd.DataFrame({"h": by_feat.to_numpy(), "y": df[col].to_numpy()})
-                spread = votes.groupby("h")["y"].nunique()
-                clashing = spread.index[spread > 1]
-                if len(clashing) == 0:
-                    continue
-                n = int(votes["h"].isin(clashing).sum())
-                logger.error("              {:,} rows in {:,} groups share every "
-                             "feature but disagree on `{}`: no model can satisfy "
-                             "both", n, len(clashing), col)
 
     # --------------------------------------------------------------------- run
 
